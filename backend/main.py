@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.database import engine, Base
-from backend.routes import profile
+from backend.routes import profile, recommend
 
 Base.metadata.create_all(bind=engine)
 
@@ -16,3 +16,4 @@ app.add_middleware(
 )
 
 app.include_router(profile.router, prefix="/api")
+app.include_router(recommend.router, prefix="/api")
