@@ -1,16 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import UserProfile
-from google import genai
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+from backend.graph.graph import recommendation_graph
 
 router = APIRouter()
+
 
 @router.post("/recommend/{email}")
 def get_recommendations(email: str, db: Session = Depends(get_db)):
@@ -18,50 +13,24 @@ def get_recommendations(email: str, db: Session = Depends(get_db)):
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    prompt = f"""
-You are an expert career advisor for senior IT professionals.
-Generate exactly 3 personalized career path recommendations.
-At least one must be a leadership transition.
-
-Profile:
-- Name: {profile.name}
-- Current Role: {profile.current_role}
-- Years of Experience: {profile.years_of_experience}
-- Technical Skills: {profile.technical_skills}
-- Soft Skills: {profile.soft_skills}
-- Career Motivators: {profile.career_motivators}
-- Personality Traits: {profile.personality_traits}
-- EQ Self Awareness: {profile.eq_self_awareness}/10
-- EQ Empathy: {profile.eq_empathy}/10
-- EQ Self Regulation: {profile.eq_self_regulation}/10
-- EQ Motivation: {profile.eq_motivation}/10
-
-Respond in this exact format:
-
-RECOMMENDATION 1:
-Title: [Role Title]
-Type: [Technical Growth / Leadership Transition / Domain Pivot]
-Why This Fits: [2-3 sentences]
-Key Skills to Develop: [comma separated list]
-Timeline: [e.g. 12-18 months]
-
-RECOMMENDATION 2:
-Title: [Role Title]
-Type: [Technical Growth / Leadership Transition / Domain Pivot]
-Why This Fits: [2-3 sentences]
-Key Skills to Develop: [comma separated list]
-Timeline: [e.g. 6-12 months]
-
-RECOMMENDATION 3:
-Title: [Role Title]
-Type: [Technical Growth / Leadership Transition / Domain Pivot]
-Why This Fits: [2-3 sentences]
-Key Skills to Develop: [comma separated list]
-Timeline: [e.g. 18-24 months]
-"""
-
-    response = client.models.generate_content(
-        model="models/gemini-2.5-flash",
-        contents=prompt
+    eq_scores = (
+        f"Self-Awareness {profile.eq_self_awareness}, Empathy {profile.eq_empathy}, "
+        f"Self-Regulation {profile.eq_self_regulation}, Motivation {profile.eq_motivation}"
     )
-    return {"recommendations": response.text}
+
+    initial_state = {
+        "current_role": profile.current_role,
+        "years_of_experience": profile.years_of_experience,
+        "technical_skills": profile.technical_skills,
+        "soft_skills": profile.soft_skills,
+        "career_motivators": profile.career_motivators,
+        "personality_traits": profile.personality_traits,
+        "eq_scores": eq_scores,
+        "profile_summary": "",
+        "retrieved_docs": [],
+        "final_recommendations": "",
+    }
+
+    result_state = recommendation_graph.invoke(initial_state)
+
+    return {"recommendations": result_state["final_recommendations"]}

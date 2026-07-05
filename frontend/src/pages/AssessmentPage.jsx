@@ -22,10 +22,49 @@ export default function AssessmentPage() {
   const [formData, setFormData] = useState(initialForm)
   const [loading, setLoading] = useState(false)
   const [submittedEmail, setSubmittedEmail] = useState("")
+  const [resumeFile, setResumeFile] = useState(null)
+  const [parsing, setParsing] = useState(false)
   const navigate = useNavigate()
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value })
+  }
+
+  const handleResumeChange = (e) => {
+    setResumeFile(e.target.files[0])
+  }
+
+  const handleParseResume = async () => {
+    if (!resumeFile) {
+      toast.error("Please choose a PDF file first")
+      return
+    }
+
+    setParsing(true)
+    try {
+      const fd = new FormData()
+      fd.append("file", resumeFile)
+
+      const res = await API.post("/api/resume/parse", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+
+      setFormData((prev) => ({
+        ...prev,
+        current_role: res.data.current_role || prev.current_role,
+        years_of_experience: res.data.years_of_experience ?? prev.years_of_experience,
+        technical_skills: res.data.technical_skills || prev.technical_skills,
+        soft_skills: res.data.soft_skills || prev.soft_skills,
+        career_motivators: res.data.career_motivators || prev.career_motivators,
+        personality_traits: res.data.personality_traits || prev.personality_traits,
+      }))
+
+      toast.success("Resume parsed! Review the pre-filled fields below.")
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to parse resume")
+    } finally {
+      setParsing(false)
+    }
   }
 
   const handleSubmit = async (e) => {
@@ -69,6 +108,29 @@ export default function AssessmentPage() {
         </p>
 
         <form onSubmit={handleSubmit} style={{ fontFamily: "DM Sans, sans-serif" }}>
+
+          {/* Resume Upload - Optional */}
+          <div style={{ marginBottom: 28, padding: 20, background: "#f9f9f7", borderRadius: 12, border: "1px dashed #d1d5db" }}>
+            <p style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6366F1", marginBottom: 10 }}>
+              Optional — Upload Resume to Pre-fill
+            </p>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                type="file"
+                accept="application/pdf"
+                onChange={handleResumeChange}
+                style={{ fontSize: 13, fontFamily: "DM Sans, sans-serif" }}
+              />
+              <button
+                type="button"
+                onClick={handleParseResume}
+                disabled={parsing}
+                style={{ background: "#6366F1", color: "#fff", border: "none", borderRadius: 999, padding: "8px 20px", fontSize: 13, fontFamily: "DM Sans, sans-serif", fontWeight: 600, cursor: parsing ? "not-allowed" : "pointer", opacity: parsing ? 0.6 : 1 }}
+              >
+                {parsing ? "Parsing..." : "Parse Resume"}
+              </button>
+            </div>
+          </div>
 
           {/* Basic Info */}
           <div style={{ marginBottom: 28 }}>
