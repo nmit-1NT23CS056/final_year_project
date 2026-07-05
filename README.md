@@ -18,13 +18,18 @@ This project builds an AI-powered career advisory agent that combines five-dimen
 
 ---
 
-## Functional Requirements (Phase 1)
+## Functional Requirements
 
 | ID | Requirement | Status |
 |----|-------------|--------|
 | FR1 | Five-dimensional assessment form (Technical Skills, Soft Skills, Career Motivators, Personality Traits, EQ) with structured profile storage | ✅ Complete |
 | FR2 | LLM-powered career path recommendations — at least 3 personalized senior-level paths including one leadership transition | ✅ Complete |
-| FR3 | Skill gap analysis with prioritized learning roadmap against senior role benchmarks | 🔄 Planned Phase 2 |
+| FR3 | Skill gap analysis with prioritized learning roadmap against senior role benchmarks | ✅ Complete — implemented via ChromaDB RAG pipeline (14 role/level benchmark docs, top-3 retrieval, gap identified per recommendation) |
+| FR4 | PDF resume upload with NLP-based parsing, auto-populating the five-dimensional profile | ✅ Complete — implemented via pdfplumber + Gemini structured extraction |
+| FR5 | Live senior-level job postings matched to each recommendation via real-time job listings API | ⬜ Planned (Phase B) |
+| FR6 | Career transition classification (lateral/upward/pivot) + 0–100 readiness score vs peer transition profiles | ⬜ Planned (Phase B) |
+| FR7 | Mentor matching via cosine similarity over vector-encoded transition profiles | ⬜ Planned (Phase B) |
+| FR8 | SMART goal tracking with milestone persistence and completion tracking | ⬜ Planned (Phase B) |
 
 ---
 
@@ -34,7 +39,10 @@ This project builds an AI-powered career advisory agent that combines five-dimen
 |-----------|------------|
 | Backend API | Python 3.11, FastAPI |
 | Database | SQLite + SQLAlchemy |
+| Vector Database | ChromaDB (skill-benchmark knowledge base + semantic retrieval) |
+| Orchestration | LangGraph (multi-node recommendation pipeline) |
 | LLM | Google Gemini 2.5 Flash (via `google-genai`) |
+| Resume Parsing | pdfplumber (PDF text extraction) |
 | Frontend | React 19 + Vite + Tailwind CSS |
 | Routing | React Router DOM |
 | Notifications | React Hot Toast |
@@ -53,14 +61,21 @@ React Frontend (localhost:5173)
      │  Axios HTTP calls
      ▼
 FastAPI Backend (localhost:8000)
-     ├── POST /api/profile      → Save 5-dimensional profile → SQLite
-     ├── GET  /api/profile/{email} → Fetch profile
-     └── POST /api/recommend/{email} → Fetch profile → Gemini 2.5 Flash → Career Recommendations
+     ├── POST /api/profile          → Save 5-dimensional profile → SQLite
+     ├── GET  /api/profile/{email}  → Fetch profile
+     ├── POST /api/resume/parse     → pdfplumber extracts PDF text → Gemini extracts
+     │                                 structured fields (skills, role, traits) → JSON
+     └── POST /api/recommend/{email} → LangGraph pipeline:
+             │
+             ├─ 1. Profile Analyzer   → builds retrieval query from profile
+             ├─ 2. Retriever          → searches ChromaDB for top-3 relevant
+             │                           skill-benchmark documents
+             ├─ 3. Recommendation     → Gemini 2.5 Flash generates 3 career
+             │      Generator            paths, grounded in retrieved docs
+             └─ 4. Validator          → checks output format before returning
      │
      ▼
-SQLite Database (profiles.db)
-     +
-Google Gemini 2.5 Flash API
+SQLite Database (profiles.db)  +  ChromaDB (chroma_data/)  +  Google Gemini 2.5 Flash API
 ```
 
 ---
@@ -70,23 +85,29 @@ Google Gemini 2.5 Flash API
 ```
 final_year_project/
 ├── backend/
-│   ├── main.py              # FastAPI app entry point, CORS config
-│   ├── database.py          # SQLAlchemy engine, session, Base
-│   ├── models.py            # UserProfile SQLAlchemy model
-│   ├── requirements.txt     # Python dependencies
+│   ├── main.py                  # FastAPI app entry point, CORS config
+│   ├── database.py              # SQLAlchemy engine, session, Base
+│   ├── models.py                # UserProfile SQLAlchemy model
+│   ├── knowledge_base.py        # 14 role/level skill-benchmark documents
+│   ├── vector_store.py          # ChromaDB client, load + search functions
+│   ├── load_kb.py               # One-time script to load knowledge base into ChromaDB
+│   ├── requirements.txt         # Python dependencies
+│   ├── graph/
+│   │   ├── state.py             # Shared state schema (RecommendationState)
+│   │   ├── nodes.py             # 4 pipeline nodes (analyzer, retriever, generator, validator)
+│   │   └── graph.py             # LangGraph StateGraph wiring
 │   └── routes/
-│       ├── profile.py       # POST /api/profile, GET /api/profile/{email}
-│       └── recommend.py     # POST /api/recommend/{email} — Gemini integration
+│       ├── profile.py           # POST /api/profile, GET /api/profile/{email}
+│       ├── resume.py            # POST /api/resume/parse — pdfplumber + Gemini extraction
+│       └── recommend.py         # POST /api/recommend/{email} — invokes LangGraph pipeline
 ├── frontend/
 │   └── src/
-│       ├── App.jsx          # BrowserRouter + Routes
+│       ├── App.jsx              # BrowserRouter + Routes
 │       ├── pages/
-│       │   ├── AssessmentPage.jsx   # 5-dimensional assessment form
+│       │   ├── AssessmentPage.jsx   # 5-dimensional assessment form + resume upload
 │       │   └── RecommendPage.jsx    # Career recommendations display
-│       ├── components/
-│       │   └── AssessmentForm.jsx   # Form component
 │       └── utils/
-│           └── axios.js     # Axios instance (baseURL: localhost:8000)
+│           └── axios.js         # Axios instance (baseURL: localhost:8000)
 ├── .gitignore
 ├── Intelligent_Career_Path_Advisory_Agent_Synopsis.pdf
 └── README.md
@@ -115,14 +136,17 @@ python -m venv venv
 venv\Scripts\activate
 
 # 3. Install dependencies
-pip install fastapi uvicorn sqlalchemy pydantic python-dotenv google-genai
+pip install -r backend/requirements.txt
 
 # 4. Create .env file inside backend/
 # backend/.env
 GEMINI_API_KEY=your_gemini_api_key_here
 
-# 5. Run the backend server
-uvicorn backend.main:app
+# 5. Load the skill-benchmark knowledge base into ChromaDB (one-time step)
+python -m backend.load_kb
+
+# 6. Run the backend server
+uvicorn backend.main:app --reload
 ```
 
 Backend runs at: `http://localhost:8000`
@@ -144,16 +168,17 @@ Frontend runs at: `http://localhost:5173`
 ## How to Use
 
 1. Open `http://localhost:5173`
-2. Fill in the 5-dimensional assessment form:
+2. (Optional) Upload a resume PDF and click **Parse Resume** to auto-fill fields
+3. Fill in the 5-dimensional assessment form:
    - Basic Information (name, email, years of experience, current role)
    - Dimension 1: Technical Skills
    - Dimension 2: Soft Skills
    - Dimension 3: Career Motivators
    - Dimension 4: Personality Traits
    - Dimension 5: Emotional Intelligence (EQ sliders 1-10)
-3. Click **Submit Profile** — profile is saved to SQLite
-4. Click **Get My Recommendations →**
-5. View 3 personalized AI-generated career path recommendations with titles, type badges, reasoning, key skills to develop, and timelines
+4. Click **Submit Profile** — profile is saved to SQLite
+5. Click **Get My Recommendations →**
+6. View 3 personalized AI-generated career path recommendations, each grounded in retrieved skill-benchmark documents and including an explicit **Skill Gap Identified** section
 
 ---
 
@@ -163,7 +188,8 @@ Frontend runs at: `http://localhost:5173`
 |--------|----------|-------------|
 | POST | `/api/profile` | Create a new 5-dimensional user profile |
 | GET | `/api/profile/{email}` | Fetch a saved profile by email |
-| POST | `/api/recommend/{email}` | Generate Gemini-powered career recommendations |
+| POST | `/api/resume/parse` | Extract structured profile fields from an uploaded PDF resume |
+| POST | `/api/recommend/{email}` | Run the LangGraph pipeline to generate RAG-grounded career recommendations |
 
 ---
 
@@ -171,13 +197,13 @@ Frontend runs at: `http://localhost:5173`
 
 - **SQLite** chosen over Firebase for prototype simplicity — no external service dependency
 - **Gemini 2.5 Flash** chosen for its strong reasoning capability and free-tier availability
-- **RAG pipeline** planned for Phase 2 — will use ChromaDB to ground recommendations in real industry benchmarks
+- **ChromaDB** chosen for the RAG pipeline — a lightweight, local-first vector database that needs no separate server, storing a 14-document skill-benchmark knowledge base (role/level pairs across Backend, Frontend, Full-Stack, Data/ML, DevOps, Engineering Management, Product, and QA tracks) with built-in embeddings for semantic retrieval
+- **LangGraph** chosen to structure the recommendation flow as an explicit 4-node pipeline (Profile Analyzer → Retriever → Recommendation Generator → Validator) rather than one monolithic prompt — this isolates each responsibility, making the flow easier to reason about, debug, and extend
+- **pdfplumber** chosen for resume parsing — extracts raw text from PDF resumes, which Gemini then structures into profile fields, reducing manual form-filling
 - **CORS** configured to allow frontend-backend communication on localhost
 - **Modular routing** — each feature has its own route file for clean separation
 
 ---
-
-## References
 
 ## References
 
